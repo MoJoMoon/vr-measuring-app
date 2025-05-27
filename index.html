@@ -213,23 +213,67 @@
             }
             
             async startXR() {
+                this.updateStatus("Checking XR support...");
+                
+                // First check if XR is available
+                if (!('xr' in navigator)) {
+                    this.updateStatus("WebXR not supported in this browser");
+                    return;
+                }
+                
                 try {
+                    // Check if AR is supported
+                    const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                    if (!isSupported) {
+                        this.updateStatus("AR not supported - trying VR mode...");
+                        await this.tryVRMode();
+                        return;
+                    }
+                    
+                    this.updateStatus("Requesting AR session...");
+                    
+                    // Try with minimal requirements first
                     const session = await navigator.xr.requestSession('immersive-ar', {
-                        requiredFeatures: ['local', 'hit-test'],
-                        optionalFeatures: ['dom-overlay', 'hand-tracking']
+                        requiredFeatures: ['local'],
+                        optionalFeatures: ['hit-test', 'dom-overlay', 'hand-tracking']
                     });
                     
+                    this.updateStatus("Setting up XR session...");
                     await this.renderer.xr.setSession(session);
                     this.isInXR = true;
-                    this.updateStatus("Mixed Reality Active - Use controllers to measure");
+                    this.updateStatus("Mixed Reality Active! Use controllers to measure");
                     
                     // Hide desktop controls in XR
                     document.getElementById('controls').style.display = 'none';
                     
                 } catch (error) {
-                    console.error('XR not supported or failed to start:', error);
-                    this.updateStatus("XR not available - using desktop mode for testing");
+                    console.error('XR failed:', error);
+                    this.updateStatus(`XR Error: ${error.message} - Using desktop mode`);
                     this.isInXR = false;
+                }
+            }
+            
+            async tryVRMode() {
+                try {
+                    const isVRSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                    if (!isVRSupported) {
+                        this.updateStatus("Neither AR nor VR supported - desktop mode only");
+                        return;
+                    }
+                    
+                    this.updateStatus("Starting VR mode...");
+                    const session = await navigator.xr.requestSession('immersive-vr', {
+                        requiredFeatures: ['local'],
+                        optionalFeatures: ['hand-tracking']
+                    });
+                    
+                    await this.renderer.xr.setSession(session);
+                    this.isInXR = true;
+                    this.updateStatus("VR Mode Active! Use controllers to measure");
+                    document.getElementById('controls').style.display = 'none';
+                    
+                } catch (error) {
+                    this.updateStatus(`VR also failed: ${error.message} - Desktop mode only`);
                 }
             }
             
