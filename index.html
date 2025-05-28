@@ -3,26 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AR Measuring Tool - Meta Quest 3</title>
+    <title>Simple AR Controller Test</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body {
             margin: 0;
-            padding: 0;
+            padding: 20px;
             background: #000;
             color: white;
             font-family: Arial, sans-serif;
         }
         
         #ui {
-            position: absolute;
-            top: 20px;
-            left: 20px;
             background: rgba(0,0,0,0.8);
             padding: 20px;
             border-radius: 10px;
-            z-index: 100;
-            max-width: 300px;
+            margin-bottom: 20px;
         }
         
         button {
@@ -39,418 +35,199 @@
         button:hover { background: #45a049; }
         button:disabled { background: #666; cursor: not-allowed; }
         
-        #measurements {
-            position: absolute;
-            top: 20px;
-            right: 20px;
+        #log {
             background: rgba(0,0,0,0.8);
             padding: 15px;
-            border-radius: 10px;
-            z-index: 100;
-            max-width: 250px;
-        }
-        
-        .measurement-item {
-            background: rgba(255,255,255,0.1);
-            padding: 8px;
-            margin: 5px 0;
             border-radius: 5px;
-            font-size: 14px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
         }
     </style>
 </head>
 <body>
     <div id="ui">
-        <h3>AR Measuring Tool</h3>
-        <p id="status">Loading...</p>
-        <p id="instructions">Point controllers at surfaces and pull trigger to measure</p>
-        <button id="startAR">Start AR Measuring</button>
-        <button id="clearMeasurements">Clear All</button>
-        <button id="toggleUnits">Units: Meters</button>
+        <h2>Simple AR Controller Test</h2>
+        <p id="status">Ready</p>
+        <button id="startAR">Start Simple AR</button>
+        <button id="addCube">Add Test Cube</button>
+        <button id="clearAll">Clear All</button>
     </div>
     
-    <div id="measurements">
-        <h4>Measurements:</h4>
-        <div id="measurementList">No measurements yet</div>
+    <div id="log">
+        <div>Debug Log:</div>
     </div>
 
     <script>
-        class ARMeasuringTool {
-            constructor() {
-                this.scene = new THREE.Scene();
-                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000);
-                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                
-                this.session = null;
-                this.referenceSpace = null;
-                this.hitTestSource = null;
-                this.controllers = [];
-                this.measurementPoints = [];
-                this.measurementLines = [];
-                this.useMetric = true;
-                this.pointCounter = 0;
-                
-                this.init();
+        let scene, camera, renderer, session, referenceSpace;
+        let controllers = [];
+        let cubes = [];
+        let logDiv = document.getElementById('log');
+        
+        function log(message) {
+            console.log(message);
+            logDiv.innerHTML += '<div>' + new Date().toLocaleTimeString() + ': ' + message + '</div>';
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+            log('STATUS: ' + message);
+        }
+        
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000);
+            
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            
+            // Add lighting
+            const light = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(light);
+            
+            const directional = new THREE.DirectionalLight(0xffffff, 0.5);
+            directional.position.set(1, 1, 1);
+            scene.add(directional);
+            
+            log('Three.js initialized');
+        }
+        
+        function createController(index) {
+            const controller = renderer.xr.getController(index);
+            
+            // Add select event
+            controller.addEventListener('selectstart', () => {
+                log(`Controller ${index} trigger pressed!`);
+                addCubeAtController(controller);
+            });
+            
+            // Create visual ray
+            const geometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -2)
+            ]);
+            const material = new THREE.LineBasicMaterial({ color: 0xff0000 });
+            const line = new THREE.Line(geometry, material);
+            controller.add(line);
+            
+            scene.add(controller);
+            controllers.push(controller);
+            
+            log(`Controller ${index} created`);
+            return controller;
+        }
+        
+        function addCubeAtController(controller) {
+            // Get controller position
+            const position = new THREE.Vector3();
+            controller.getWorldPosition(position);
+            
+            // Move cube forward from controller
+            const direction = new THREE.Vector3(0, 0, -1);
+            const matrix = new THREE.Matrix4();
+            matrix.extractRotation(controller.matrixWorld);
+            direction.applyMatrix4(matrix);
+            
+            position.add(direction.multiplyScalar(0.5)); // 0.5 meters forward
+            
+            addCube(position);
+        }
+        
+        function addCube(position) {
+            const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: Math.random() * 0xffffff 
+            });
+            const cube = new THREE.Mesh(geometry, material);
+            
+            if (position) {
+                cube.position.copy(position);
+            } else {
+                cube.position.set(0, 1.5, -1); // Default position
             }
             
-            init() {
-                // Setup renderer
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-                this.renderer.xr.enabled = true;
-                document.body.appendChild(this.renderer.domElement);
-                
-                // Setup lighting
-                const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-                this.scene.add(ambientLight);
-                
-                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                directionalLight.position.set(1, 1, 1);
-                this.scene.add(directionalLight);
-                
-                this.setupEventListeners();
-                this.updateStatus('Ready - Click Start AR Measuring');
-            }
+            scene.add(cube);
+            cubes.push(cube);
             
-            setupEventListeners() {
-                document.getElementById('startAR').onclick = () => this.startAR();
-                document.getElementById('clearMeasurements').onclick = () => this.clearMeasurements();
-                document.getElementById('toggleUnits').onclick = () => this.toggleUnits();
-                
-                window.addEventListener('resize', () => {
-                    this.camera.aspect = window.innerWidth / window.innerHeight;
-                    this.camera.updateProjectionMatrix();
-                    this.renderer.setSize(window.innerWidth, window.innerHeight);
-                });
-            }
+            log(`Cube added at: ${cube.position.x.toFixed(2)}, ${cube.position.y.toFixed(2)}, ${cube.position.z.toFixed(2)}`);
+        }
+        
+        function clearAll() {
+            cubes.forEach(cube => {
+                scene.remove(cube);
+            });
+            cubes = [];
+            log('All cubes cleared');
+        }
+        
+        async function startAR() {
+            const button = document.getElementById('startAR');
+            button.disabled = true;
+            button.textContent = 'Starting...';
             
-            async startAR() {
-                const button = document.getElementById('startAR');
-                button.disabled = true;
-                button.textContent = 'Starting AR...';
+            try {
+                log('Requesting AR session...');
+                session = await navigator.xr.requestSession('immersive-ar');
+                log('✓ Got AR session');
                 
-                try {
-                    if (!('xr' in navigator)) {
-                        throw new Error('WebXR not available');
-                    }
-                    
-                    this.updateStatus('Requesting AR session...');
-                    
-                    // Request AR session - try without hit-test first
-                    this.session = await navigator.xr.requestSession('immersive-ar', {
-                        optionalFeatures: ['hit-test', 'local-floor', 'local', 'viewer']
-                    });
-                    
-                    // Setup reference space - try multiple options
-                    try {
-                        this.referenceSpace = await this.session.requestReferenceSpace('local-floor');
-                        console.log('Using local-floor reference space');
-                    } catch {
-                        try {
-                            this.referenceSpace = await this.session.requestReferenceSpace('local');
-                            console.log('Using local reference space');
-                        } catch {
-                            this.referenceSpace = await this.session.requestReferenceSpace('viewer');
-                            console.log('Using viewer reference space');
-                        }
-                    }
-                    
-                    // Try to setup hit testing (optional)
-                    try {
-                        this.hitTestSource = await this.session.requestHitTestSource({ space: this.referenceSpace });
-                        console.log('Hit testing available');
-                        this.updateStatus('AR Active! Hit-test enabled - point and trigger');
-                    } catch (error) {
-                        console.log('Hit testing not available, using controller position');
-                        this.updateStatus('AR Active! Point controller and trigger to measure');
-                    }
-                    
-                    // Setup Three.js XR
-                    await this.renderer.xr.setSession(this.session);
-                    
-                    // Setup controllers
-                    this.setupControllers();
-                    
-                    // Start render loop
-                    this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
-                    
-                    // Setup session end handler
-                    this.session.addEventListener('end', () => {
-                        this.onSessionEnd();
-                    });
-                    
-                    button.textContent = 'Exit AR';
-                    button.onclick = () => this.session.end();
-                    
-                    // Hide UI in AR
-                    document.getElementById('ui').style.display = 'none';
-                    
-                } catch (error) {
-                    console.error('AR failed:', error);
-                    this.updateStatus(`AR failed: ${error.message}`);
-                    button.textContent = 'Start AR Measuring';
+                // Get reference space
+                referenceSpace = await session.requestReferenceSpace('local');
+                log('✓ Got reference space');
+                
+                // Set up session
+                await renderer.xr.setSession(session);
+                log('✓ Three.js XR session set');
+                
+                // Create controllers
+                createController(0);
+                createController(1);
+                
+                // Start render loop
+                renderer.setAnimationLoop(render);
+                log('✓ Render loop started');
+                
+                // Handle session end
+                session.addEventListener('end', () => {
+                    log('AR session ended');
+                    session = null;
+                    controllers = [];
+                    renderer.setAnimationLoop(null);
+                    button.textContent = 'Start Simple AR';
                     button.disabled = false;
-                }
-            }
-            
-            setupControllers() {
-                // Controller 1
-                const controller1 = this.renderer.xr.getController(0);
-                controller1.addEventListener('selectstart', (event) => this.onSelect(event));
-                this.scene.add(controller1);
-                
-                // Controller 2  
-                const controller2 = this.renderer.xr.getController(1);
-                controller2.addEventListener('selectstart', (event) => this.onSelect(event));
-                this.scene.add(controller2);
-                
-                // Add visual rays to controllers
-                const rayGeometry = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(0, 0, 0),
-                    new THREE.Vector3(0, 0, -1)
-                ]);
-                
-                const rayMaterial = new THREE.LineBasicMaterial({ 
-                    color: 0xff4444,
-                    transparent: true,
-                    opacity: 0.8
+                    updateStatus('AR session ended');
                 });
                 
-                const ray1 = new THREE.Line(rayGeometry, rayMaterial);
-                ray1.scale.z = 10;
-                controller1.add(ray1);
+                updateStatus('AR Active! Pull controller triggers to add cubes');
+                button.textContent = 'Exit AR';
+                button.onclick = () => session.end();
                 
-                const ray2 = new THREE.Line(rayGeometry, rayMaterial);
-                ray2.scale.z = 10;
-                controller2.add(ray2);
-                
-                this.controllers = [controller1, controller2];
-            }
-            
-            onSelect(event) {
-                // Store which controller triggered this
-                this.lastTriggeredController = event.target;
-                this.triggerPressed = true;
-                console.log('Trigger pressed on controller');
-            }
-            
-            render(time, frame) {
-                if (frame && this.triggerPressed) {
-                    let hitPosition = null;
-                    
-                    // Try hit testing first if available
-                    if (this.hitTestSource) {
-                        try {
-                            const hitTestResults = frame.getHitTestResults(this.hitTestSource);
-                            if (hitTestResults.length > 0) {
-                                const hit = hitTestResults[0];
-                                const pose = hit.getPose(this.referenceSpace);
-                                if (pose) {
-                                    hitPosition = new THREE.Vector3(
-                                        pose.transform.position.x,
-                                        pose.transform.position.y,
-                                        pose.transform.position.z
-                                    );
-                                    console.log('Hit test position:', hitPosition);
-                                }
-                            }
-                        } catch (error) {
-                            console.log('Hit test failed:', error.message);
-                        }
-                    }
-                    
-                    // Fallback: use controller position + forward direction
-                    if (!hitPosition && this.lastTriggeredController) {
-                        const controller = this.lastTriggeredController;
-                        
-                        // Get controller position
-                        const controllerPos = new THREE.Vector3();
-                        controller.getWorldPosition(controllerPos);
-                        
-                        // Get controller forward direction
-                        const controllerDir = new THREE.Vector3(0, 0, -1);
-                        const controllerMatrix = new THREE.Matrix4();
-                        controller.updateMatrixWorld();
-                        controllerMatrix.extractRotation(controller.matrixWorld);
-                        controllerDir.applyMatrix4(controllerMatrix);
-                        
-                        // Place point 1 meter in front of controller
-                        hitPosition = controllerPos.clone().add(controllerDir.multiplyScalar(1.0));
-                        console.log('Controller-based position:', hitPosition);
-                    }
-                    
-                    if (hitPosition) {
-                        this.addMeasurementPoint(hitPosition);
-                    }
-                    
-                    this.triggerPressed = false;
-                    this.lastTriggeredController = null;
-                }
-                
-                this.renderer.render(this.scene, this.camera);
-            }
-            
-            addMeasurementPoint(position) {
-                // Create point marker - smaller and more visible
-                const pointGeometry = new THREE.SphereGeometry(0.02, 16, 16);
-                const pointMaterial = new THREE.MeshPhongMaterial({ 
-                    color: 0xff0000,
-                    emissive: 0x220000
-                });
-                const pointMesh = new THREE.Mesh(pointGeometry, pointMaterial);
-                pointMesh.position.copy(position);
-                this.scene.add(pointMesh);
-                
-                this.pointCounter++;
-                
-                const point = {
-                    position: position.clone(),
-                    mesh: pointMesh,
-                    id: this.pointCounter
-                };
-                
-                this.measurementPoints.push(point);
-                
-                // Create measurement line if we have at least 2 points
-                if (this.measurementPoints.length >= 2) {
-                    this.createMeasurementLine();
-                }
-                
-                console.log(`Point ${this.pointCounter} placed at:`, position);
-            }
-            
-            createMeasurementLine() {
-                const lastTwo = this.measurementPoints.slice(-2);
-                const startPoint = lastTwo[0];
-                const endPoint = lastTwo[1];
-                
-                // Create line geometry
-                const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-                    startPoint.position,
-                    endPoint.position
-                ]);
-                
-                const lineMaterial = new THREE.LineBasicMaterial({ 
-                    color: 0x00ff00,
-                    linewidth: 3
-                });
-                
-                const line = new THREE.Line(lineGeometry, lineMaterial);
-                this.scene.add(line);
-                
-                // Calculate distance
-                const distance = startPoint.position.distanceTo(endPoint.position);
-                const displayDistance = this.useMetric ? 
-                    `${distance.toFixed(3)} m` : 
-                    `${(distance * 3.28084).toFixed(2)} ft`;
-                
-                // Create smaller distance label at midpoint
-                const midpoint = new THREE.Vector3()
-                    .addVectors(startPoint.position, endPoint.position)
-                    .multiplyScalar(0.5);
-                
-                const labelGeometry = new THREE.SphereGeometry(0.01, 12, 12);
-                const labelMaterial = new THREE.MeshPhongMaterial({ 
-                    color: 0x00ffff,
-                    emissive: 0x002222
-                });
-                const distanceLabel = new THREE.Mesh(labelGeometry, labelMaterial);
-                distanceLabel.position.copy(midpoint);
-                distanceLabel.position.y += 0.02; // Smaller offset
-                this.scene.add(distanceLabel);
-                
-                const measurement = {
-                    line: line,
-                    label: distanceLabel,
-                    distance: distance,
-                    displayDistance: displayDistance,
-                    startPoint: startPoint,
-                    endPoint: endPoint,
-                    id: this.measurementLines.length + 1
-                };
-                
-                this.measurementLines.push(measurement);
-                this.updateMeasurementsList();
-                
-                console.log(`Measurement ${measurement.id}: ${displayDistance}`);
-            }
-            
-            updateMeasurementsList() {
-                const listDiv = document.getElementById('measurementList');
-                
-                if (this.measurementLines.length === 0) {
-                    listDiv.innerHTML = 'No measurements yet';
-                    return;
-                }
-                
-                let html = '';
-                this.measurementLines.forEach((measurement, index) => {
-                    html += `
-                        <div class="measurement-item">
-                            <strong>Measurement ${index + 1}:</strong><br>
-                            ${measurement.displayDistance}
-                        </div>
-                    `;
-                });
-                
-                listDiv.innerHTML = html;
-            }
-            
-            clearMeasurements() {
-                // Remove all points
-                this.measurementPoints.forEach(point => {
-                    this.scene.remove(point.mesh);
-                });
-                this.measurementPoints = [];
-                
-                // Remove all lines
-                this.measurementLines.forEach(measurement => {
-                    this.scene.remove(measurement.line);
-                    this.scene.remove(measurement.label);
-                });
-                this.measurementLines = [];
-                
-                this.pointCounter = 0;
-                this.updateMeasurementsList();
-                console.log('All measurements cleared');
-            }
-            
-            toggleUnits() {
-                this.useMetric = !this.useMetric;
-                const button = document.getElementById('toggleUnits');
-                button.textContent = `Units: ${this.useMetric ? 'Meters' : 'Feet'}`;
-                
-                // Update existing measurements
-                this.measurementLines.forEach(measurement => {
-                    measurement.displayDistance = this.useMetric ? 
-                        `${measurement.distance.toFixed(3)} m` : 
-                        `${(measurement.distance * 3.28084).toFixed(2)} ft`;
-                });
-                
-                this.updateMeasurementsList();
-            }
-            
-            onSessionEnd() {
-                this.session = null;
-                this.referenceSpace = null;
-                this.hitTestSource = null;
-                
-                document.getElementById('ui').style.display = 'block';
-                document.getElementById('startAR').textContent = 'Start AR Measuring';
-                document.getElementById('startAR').disabled = false;
-                document.getElementById('startAR').onclick = () => this.startAR();
-                
-                this.updateStatus('AR session ended');
-                this.renderer.setAnimationLoop(null);
-            }
-            
-            updateStatus(message) {
-                document.getElementById('status').textContent = message;
-                console.log('Status:', message);
+            } catch (error) {
+                log(`❌ AR failed: ${error.message}`);
+                updateStatus(`AR failed: ${error.message}`);
+                button.textContent = 'Start Simple AR';
+                button.disabled = false;
             }
         }
         
-        // Initialize the measuring tool
-        const measuringTool = new ARMeasuringTool();
+        function render() {
+            renderer.render(scene, camera);
+        }
+        
+        // Initialize
+        init();
+        
+        // Button events
+        document.getElementById('startAR').onclick = startAR;
+        document.getElementById('addCube').onclick = () => addCube();
+        document.getElementById('clearAll').onclick = clearAll;
+        
+        updateStatus('Ready - Click Start Simple AR');
     </script>
 </body>
 </html>
