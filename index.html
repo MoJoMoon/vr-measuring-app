@@ -3,233 +3,419 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple AR Test - Meta Quest 3</title>
+    <title>AR Measuring Tool - Meta Quest 3</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body {
             margin: 0;
-            padding: 20px;
+            padding: 0;
             background: #000;
             color: white;
             font-family: Arial, sans-serif;
         }
         
-        #info {
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
             background: rgba(0,0,0,0.8);
             padding: 20px;
             border-radius: 10px;
-            margin-bottom: 20px;
+            z-index: 100;
+            max-width: 300px;
         }
         
         button {
             background: #4CAF50;
             color: white;
             border: none;
-            padding: 15px 30px;
-            margin: 10px;
+            padding: 15px 25px;
+            margin: 10px 5px;
             border-radius: 5px;
             cursor: pointer;
-            font-size: 18px;
+            font-size: 16px;
         }
         
-        button:hover {
-            background: #45a049;
-        }
+        button:hover { background: #45a049; }
+        button:disabled { background: #666; cursor: not-allowed; }
         
-        button:disabled {
-            background: #666;
-            cursor: not-allowed;
-        }
-        
-        #log {
+        #measurements {
+            position: absolute;
+            top: 20px;
+            right: 20px;
             background: rgba(0,0,0,0.8);
             padding: 15px;
+            border-radius: 10px;
+            z-index: 100;
+            max-width: 250px;
+        }
+        
+        .measurement-item {
+            background: rgba(255,255,255,0.1);
+            padding: 8px;
+            margin: 5px 0;
             border-radius: 5px;
-            margin-top: 20px;
-            max-height: 200px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
-    <div id="info">
-        <h2>Simple AR Test</h2>
+    <div id="ui">
+        <h3>AR Measuring Tool</h3>
         <p id="status">Loading...</p>
-        <button id="startAR">Start AR Test</button>
-        <button id="startVR">Start VR Test</button>
+        <p id="instructions">Point controllers at surfaces and pull trigger to measure</p>
+        <button id="startAR">Start AR Measuring</button>
+        <button id="clearMeasurements">Clear All</button>
+        <button id="toggleUnits">Units: Meters</button>
     </div>
     
-    <div id="log">
-        <div>Debug Log:</div>
+    <div id="measurements">
+        <h4>Measurements:</h4>
+        <div id="measurementList">No measurements yet</div>
     </div>
 
     <script>
-        let currentSession = null;
-        let logDiv = document.getElementById('log');
-        
-        function log(message) {
-            console.log(message);
-            logDiv.innerHTML += '<div>' + new Date().toLocaleTimeString() + ': ' + message + '</div>';
-            logDiv.scrollTop = logDiv.scrollHeight;
-        }
-        
-        function updateStatus(message) {
-            document.getElementById('status').textContent = message;
-            log('STATUS: ' + message);
-        }
-        
-        async function testReferenceSpaces(session) {
-            const spaces = ['local-floor', 'local', 'viewer', 'bounded-floor'];
-            let workingSpace = null;
+        class ARMeasuringTool {
+            constructor() {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                
+                this.session = null;
+                this.referenceSpace = null;
+                this.hitTestSource = null;
+                this.controllers = [];
+                this.measurementPoints = [];
+                this.measurementLines = [];
+                this.useMetric = true;
+                this.pointCounter = 0;
+                
+                this.init();
+            }
             
-            for (const spaceName of spaces) {
+            init() {
+                // Setup renderer
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.xr.enabled = true;
+                document.body.appendChild(this.renderer.domElement);
+                
+                // Setup lighting
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(1, 1, 1);
+                this.scene.add(directionalLight);
+                
+                this.setupEventListeners();
+                this.updateStatus('Ready - Click Start AR Measuring');
+            }
+            
+            setupEventListeners() {
+                document.getElementById('startAR').onclick = () => this.startAR();
+                document.getElementById('clearMeasurements').onclick = () => this.clearMeasurements();
+                document.getElementById('toggleUnits').onclick = () => this.toggleUnits();
+                
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+            
+            async startAR() {
+                const button = document.getElementById('startAR');
+                button.disabled = true;
+                button.textContent = 'Starting AR...';
+                
                 try {
-                    log(`Testing reference space: ${spaceName}`);
-                    const space = await session.requestReferenceSpace(spaceName);
-                    log(`✓ ${spaceName} WORKS!`);
-                    if (!workingSpace) {
-                        workingSpace = { name: spaceName, space: space };
+                    if (!('xr' in navigator)) {
+                        throw new Error('WebXR not available');
                     }
+                    
+                    this.updateStatus('Requesting AR session...');
+                    
+                    // Request AR session with hit-test
+                    this.session = await navigator.xr.requestSession('immersive-ar', {
+                        requiredFeatures: ['hit-test'],
+                        optionalFeatures: ['local-floor', 'local', 'viewer']
+                    });
+                    
+                    // Setup reference space
+                    this.referenceSpace = await this.session.requestReferenceSpace('viewer');
+                    
+                    // Setup hit testing
+                    const viewerSpace = await this.session.requestReferenceSpace('viewer');
+                    this.hitTestSource = await this.session.requestHitTestSource({ space: viewerSpace });
+                    
+                    // Setup Three.js XR
+                    await this.renderer.xr.setSession(this.session);
+                    
+                    // Setup controllers
+                    this.setupControllers();
+                    
+                    // Start render loop
+                    this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
+                    
+                    // Setup session end handler
+                    this.session.addEventListener('end', () => {
+                        this.onSessionEnd();
+                    });
+                    
+                    this.updateStatus('AR Active! Point and trigger to measure');
+                    button.textContent = 'Exit AR';
+                    button.onclick = () => this.session.end();
+                    
+                    // Hide UI in AR
+                    document.getElementById('ui').style.display = 'none';
+                    
                 } catch (error) {
-                    log(`✗ ${spaceName} failed: ${error.message}`);
+                    console.error('AR failed:', error);
+                    this.updateStatus(`AR failed: ${error.message}`);
+                    button.textContent = 'Start AR Measuring';
+                    button.disabled = false;
                 }
             }
             
-            return workingSpace;
-        }
-        
-        async function startAR() {
-            const button = document.getElementById('startAR');
-            button.disabled = true;
-            button.textContent = 'Starting AR...';
-            
-            try {
-                if (!('xr' in navigator)) {
-                    throw new Error('WebXR not available');
-                }
+            setupControllers() {
+                // Controller 1
+                const controller1 = this.renderer.xr.getController(0);
+                controller1.addEventListener('selectstart', (event) => this.onSelect(event));
+                this.scene.add(controller1);
                 
-                log('Checking AR support...');
-                const supported = await navigator.xr.isSessionSupported('immersive-ar');
-                log(`AR supported: ${supported}`);
+                // Controller 2  
+                const controller2 = this.renderer.xr.getController(1);
+                controller2.addEventListener('selectstart', (event) => this.onSelect(event));
+                this.scene.add(controller2);
                 
-                if (!supported) {
-                    throw new Error('AR not supported');
-                }
+                // Add visual rays to controllers
+                const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, 0),
+                    new THREE.Vector3(0, 0, -1)
+                ]);
                 
-                updateStatus('Requesting AR session...');
-                
-                // Try with absolutely minimal requirements
-                const session = await navigator.xr.requestSession('immersive-ar');
-                log('✓ Got AR session!');
-                
-                currentSession = session;
-                updateStatus('Testing reference spaces...');
-                
-                const workingSpace = await testReferenceSpaces(session);
-                
-                if (!workingSpace) {
-                    throw new Error('No reference spaces work');
-                }
-                
-                updateStatus(`AR SUCCESS! Using ${workingSpace.name}`);
-                log(`🎉 AR is working with ${workingSpace.name}!`);
-                
-                button.textContent = 'Exit AR';
-                button.onclick = () => {
-                    session.end();
-                };
-                
-                session.addEventListener('end', () => {
-                    log('AR session ended');
-                    currentSession = null;
-                    button.textContent = 'Start AR Test';
-                    button.disabled = false;
-                    button.onclick = startAR;
-                    updateStatus('AR session ended');
+                const rayMaterial = new THREE.LineBasicMaterial({ 
+                    color: 0xff4444,
+                    transparent: true,
+                    opacity: 0.8
                 });
                 
-            } catch (error) {
-                log(`❌ AR failed: ${error.message}`);
-                updateStatus(`AR failed: ${error.message}`);
-                button.textContent = 'Start AR Test';
-                button.disabled = false;
+                const ray1 = new THREE.Line(rayGeometry, rayMaterial);
+                ray1.scale.z = 10;
+                controller1.add(ray1);
+                
+                const ray2 = new THREE.Line(rayGeometry, rayMaterial);
+                ray2.scale.z = 10;
+                controller2.add(ray2);
+                
+                this.controllers = [controller1, controller2];
             }
-        }
-        
-        async function startVR() {
-            const button = document.getElementById('startVR');
-            button.disabled = true;
-            button.textContent = 'Starting VR...';
             
-            try {
-                if (!('xr' in navigator)) {
-                    throw new Error('WebXR not available');
+            onSelect(event) {
+                // The hit testing will be done in the render loop
+                this.triggerPressed = true;
+            }
+            
+            render(time, frame) {
+                if (frame && this.hitTestSource) {
+                    // Perform hit test
+                    const hitTestResults = frame.getHitTestResults(this.hitTestSource);
+                    
+                    if (hitTestResults.length > 0 && this.triggerPressed) {
+                        const hit = hitTestResults[0];
+                        const pose = hit.getPose(this.referenceSpace);
+                        
+                        if (pose) {
+                            const position = new THREE.Vector3(
+                                pose.transform.position.x,
+                                pose.transform.position.y,
+                                pose.transform.position.z
+                            );
+                            
+                            this.addMeasurementPoint(position);
+                        }
+                        
+                        this.triggerPressed = false;
+                    }
                 }
                 
-                log('Checking VR support...');
-                const supported = await navigator.xr.isSessionSupported('immersive-vr');
-                log(`VR supported: ${supported}`);
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            addMeasurementPoint(position) {
+                // Create point marker
+                const pointGeometry = new THREE.SphereGeometry(0.01, 16, 16);
+                const pointMaterial = new THREE.MeshPhongMaterial({ 
+                    color: 0xff0000,
+                    emissive: 0x440000
+                });
+                const pointMesh = new THREE.Mesh(pointGeometry, pointMaterial);
+                pointMesh.position.copy(position);
+                this.scene.add(pointMesh);
                 
-                if (!supported) {
-                    throw new Error('VR not supported');
-                }
+                // Add number label above point
+                this.pointCounter++;
+                const labelGeometry = new THREE.SphereGeometry(0.005, 8, 8);
+                const labelMaterial = new THREE.MeshPhongMaterial({ 
+                    color: 0xffff00,
+                    emissive: 0x444400
+                });
+                const label = new THREE.Mesh(labelGeometry, labelMaterial);
+                label.position.copy(position);
+                label.position.y += 0.03;
+                this.scene.add(label);
                 
-                updateStatus('Requesting VR session...');
-                
-                const session = await navigator.xr.requestSession('immersive-vr');
-                log('✓ Got VR session!');
-                
-                currentSession = session;
-                updateStatus('Testing reference spaces...');
-                
-                const workingSpace = await testReferenceSpaces(session);
-                
-                if (!workingSpace) {
-                    throw new Error('No reference spaces work');
-                }
-                
-                updateStatus(`VR SUCCESS! Using ${workingSpace.name}`);
-                log(`🎉 VR is working with ${workingSpace.name}!`);
-                
-                button.textContent = 'Exit VR';
-                button.onclick = () => {
-                    session.end();
+                const point = {
+                    position: position.clone(),
+                    mesh: pointMesh,
+                    label: label,
+                    id: this.pointCounter
                 };
                 
-                session.addEventListener('end', () => {
-                    log('VR session ended');
-                    currentSession = null;
-                    button.textContent = 'Start VR Test';
-                    button.disabled = false;
-                    button.onclick = startVR;
-                    updateStatus('VR session ended');
+                this.measurementPoints.push(point);
+                
+                // Create measurement line if we have at least 2 points
+                if (this.measurementPoints.length >= 2) {
+                    this.createMeasurementLine();
+                }
+                
+                console.log(`Point ${this.pointCounter} placed at:`, position);
+            }
+            
+            createMeasurementLine() {
+                const lastTwo = this.measurementPoints.slice(-2);
+                const startPoint = lastTwo[0];
+                const endPoint = lastTwo[1];
+                
+                // Create line geometry
+                const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                    startPoint.position,
+                    endPoint.position
+                ]);
+                
+                const lineMaterial = new THREE.LineBasicMaterial({ 
+                    color: 0x00ff00,
+                    linewidth: 3
                 });
                 
-            } catch (error) {
-                log(`❌ VR failed: ${error.message}`);
-                updateStatus(`VR failed: ${error.message}`);
-                button.textContent = 'Start VR Test';
-                button.disabled = false;
+                const line = new THREE.Line(lineGeometry, lineMaterial);
+                this.scene.add(line);
+                
+                // Calculate distance
+                const distance = startPoint.position.distanceTo(endPoint.position);
+                const displayDistance = this.useMetric ? 
+                    `${distance.toFixed(3)} m` : 
+                    `${(distance * 3.28084).toFixed(2)} ft`;
+                
+                // Create distance label at midpoint
+                const midpoint = new THREE.Vector3()
+                    .addVectors(startPoint.position, endPoint.position)
+                    .multiplyScalar(0.5);
+                
+                const labelGeometry = new THREE.SphereGeometry(0.015, 16, 16);
+                const labelMaterial = new THREE.MeshPhongMaterial({ 
+                    color: 0x00ffff,
+                    emissive: 0x004444
+                });
+                const distanceLabel = new THREE.Mesh(labelGeometry, labelMaterial);
+                distanceLabel.position.copy(midpoint);
+                distanceLabel.position.y += 0.05;
+                this.scene.add(distanceLabel);
+                
+                const measurement = {
+                    line: line,
+                    label: distanceLabel,
+                    distance: distance,
+                    displayDistance: displayDistance,
+                    startPoint: startPoint,
+                    endPoint: endPoint,
+                    id: this.measurementLines.length + 1
+                };
+                
+                this.measurementLines.push(measurement);
+                this.updateMeasurementsList();
+                
+                console.log(`Measurement ${measurement.id}: ${displayDistance}`);
+            }
+            
+            updateMeasurementsList() {
+                const listDiv = document.getElementById('measurementList');
+                
+                if (this.measurementLines.length === 0) {
+                    listDiv.innerHTML = 'No measurements yet';
+                    return;
+                }
+                
+                let html = '';
+                this.measurementLines.forEach((measurement, index) => {
+                    html += `
+                        <div class="measurement-item">
+                            <strong>Measurement ${index + 1}:</strong><br>
+                            ${measurement.displayDistance}
+                        </div>
+                    `;
+                });
+                
+                listDiv.innerHTML = html;
+            }
+            
+            clearMeasurements() {
+                // Remove all points
+                this.measurementPoints.forEach(point => {
+                    this.scene.remove(point.mesh);
+                    this.scene.remove(point.label);
+                });
+                this.measurementPoints = [];
+                
+                // Remove all lines
+                this.measurementLines.forEach(measurement => {
+                    this.scene.remove(measurement.line);
+                    this.scene.remove(measurement.label);
+                });
+                this.measurementLines = [];
+                
+                this.pointCounter = 0;
+                this.updateMeasurementsList();
+                console.log('All measurements cleared');
+            }
+            
+            toggleUnits() {
+                this.useMetric = !this.useMetric;
+                const button = document.getElementById('toggleUnits');
+                button.textContent = `Units: ${this.useMetric ? 'Meters' : 'Feet'}`;
+                
+                // Update existing measurements
+                this.measurementLines.forEach(measurement => {
+                    measurement.displayDistance = this.useMetric ? 
+                        `${measurement.distance.toFixed(3)} m` : 
+                        `${(measurement.distance * 3.28084).toFixed(2)} ft`;
+                });
+                
+                this.updateMeasurementsList();
+            }
+            
+            onSessionEnd() {
+                this.session = null;
+                this.referenceSpace = null;
+                this.hitTestSource = null;
+                
+                document.getElementById('ui').style.display = 'block';
+                document.getElementById('startAR').textContent = 'Start AR Measuring';
+                document.getElementById('startAR').disabled = false;
+                document.getElementById('startAR').onclick = () => this.startAR();
+                
+                this.updateStatus('AR session ended');
+                this.renderer.setAnimationLoop(null);
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+                console.log('Status:', message);
             }
         }
         
-        // Initialize
-        document.getElementById('startAR').onclick = startAR;
-        document.getElementById('startVR').onclick = startVR;
-        
-        // Check initial support
-        if ('xr' in navigator) {
-            Promise.all([
-                navigator.xr.isSessionSupported('immersive-ar'),
-                navigator.xr.isSessionSupported('immersive-vr')
-            ]).then(([arSupported, vrSupported]) => {
-                updateStatus(`Ready - AR: ${arSupported}, VR: ${vrSupported}`);
-                log(`Device capabilities - AR: ${arSupported}, VR: ${vrSupported}`);
-            });
-        } else {
-            updateStatus('WebXR not available');
-        }
+        // Initialize the measuring tool
+        const measuringTool = new ARMeasuringTool();
     </script>
 </body>
 </html>
