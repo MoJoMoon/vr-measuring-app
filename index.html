@@ -1,176 +1,192 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Basic AR Debug Test</title>
+    <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'>
+    <title>Quest AR Test</title>
     <style>
         body {
+            font-family: Roboto, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 0;
             background: #000;
-            color: white;
-            font-family: Arial, sans-serif;
-            font-size: 18px;
+            color: #fff;
+            overflow: hidden;
+        }
+        
+        canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+        
+        #overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 999;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
         }
         
         button {
-            background: #4CAF50;
+            background: #007cff;
             color: white;
             border: none;
-            padding: 20px 30px;
-            margin: 15px;
-            border-radius: 10px;
+            padding: 12px 20px;
+            font-size: 16px;
+            border-radius: 5px;
             cursor: pointer;
-            font-size: 20px;
-            display: block;
-            width: 300px;
+            margin: 5px;
         }
         
-        button:hover { background: #45a049; }
-        button:disabled { background: #666; }
-        
-        #status {
-            background: rgba(255,255,255,0.1);
-            padding: 20px;
-            border-radius: 10px;
-            margin: 20px 0;
+        button:disabled {
+            background: #666;
         }
         
         #log {
-            background: rgba(255,255,255,0.05);
-            padding: 15px;
-            border-radius: 10px;
-            max-height: 400px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 14px;
-            margin-top: 20px;
+            margin-top: 10px;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: scroll;
         }
     </style>
 </head>
 <body>
-    <h1>Basic AR Debug Test</h1>
-    
-    <div id="status">
-        <strong>Status:</strong> <span id="statusText">Loading...</span>
-    </div>
-    
-    <button id="testButton">Test Button Click</button>
-    <button id="checkXR">Check WebXR Support</button>
-    <button id="startBasicAR">Start Basic AR</button>
-    
-    <div id="log">
-        <div><strong>Debug Log:</strong></div>
+    <div id="overlay">
+        <h3>Quest AR Test</h3>
+        <button id="ar-button">Start AR</button>
+        <div id="log"></div>
     </div>
 
     <script>
-        let logDiv = document.getElementById('log');
-        let statusSpan = document.getElementById('statusText');
+        let xrButton = document.getElementById('ar-button');
+        let logElement = document.getElementById('log');
+        let gl = null;
         let session = null;
-        
-        function log(message) {
-            const time = new Date().toLocaleTimeString();
-            console.log(message);
-            logDiv.innerHTML += `<div>${time}: ${message}</div>`;
-            logDiv.scrollTop = logDiv.scrollHeight;
+        let refSpace = null;
+        let xrGLFactory = null;
+        let isSessionSupported = false;
+
+        function logMessage(msg) {
+            console.log(msg);
+            logElement.innerHTML += '<div>' + new Date().toLocaleTimeString() + ': ' + msg + '</div>';
+            logElement.scrollTop = logElement.scrollHeight;
         }
-        
-        function updateStatus(message) {
-            statusSpan.textContent = message;
-            log(`STATUS: ${message}`);
-        }
-        
-        // Test basic button functionality
-        document.getElementById('testButton').onclick = function() {
-            log('✓ Button click works!');
-            updateStatus('Button click successful');
-        };
-        
-        // Check WebXR support
-        document.getElementById('checkXR').onclick = async function() {
-            log('Checking WebXR support...');
+
+        function initWebGL() {
+            if (gl) return;
             
-            if (!('xr' in navigator)) {
-                log('❌ WebXR not available in navigator');
-                updateStatus('WebXR not supported');
+            let canvas = document.createElement('canvas');
+            gl = canvas.getContext('webgl', { xrCompatible: true });
+            
+            if (!gl) {
+                logMessage('❌ WebGL not supported');
                 return;
             }
             
-            log('✓ WebXR available in navigator');
-            
-            try {
-                const arSupported = await navigator.xr.isSessionSupported('immersive-ar');
-                const vrSupported = await navigator.xr.isSessionSupported('immersive-vr');
-                
-                log(`✓ AR supported: ${arSupported}`);
-                log(`✓ VR supported: ${vrSupported}`);
-                updateStatus(`AR: ${arSupported}, VR: ${vrSupported}`);
-                
-            } catch (error) {
-                log(`❌ Error checking support: ${error.message}`);
-                updateStatus('Error checking XR support');
+            document.body.appendChild(canvas);
+            logMessage('✓ WebGL initialized');
+        }
+
+        function checkForXRSupport() {
+            if (!window.navigator.xr) {
+                logMessage('❌ WebXR not supported');
+                return Promise.resolve();
             }
-        };
-        
-        // Start basic AR
-        document.getElementById('startBasicAR').onclick = async function() {
-            const button = this;
-            button.disabled = true;
-            button.textContent = 'Starting AR...';
-            
-            try {
-                log('Attempting to start AR session...');
-                
-                if (!('xr' in navigator)) {
-                    throw new Error('WebXR not available');
+
+            return navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+                isSessionSupported = supported;
+                if (supported) {
+                    xrButton.innerHTML = 'Enter AR';
+                    xrButton.disabled = false;
+                    logMessage('✓ AR supported');
+                } else {
+                    xrButton.innerHTML = 'AR not supported';
+                    logMessage('❌ AR not supported');
                 }
-                
-                // Request the most basic AR session possible
-                session = await navigator.xr.requestSession('immersive-ar');
-                log('✓ AR session created successfully!');
-                
-                // Test getting reference space
-                const referenceSpace = await session.requestReferenceSpace('viewer');
-                log('✓ Reference space created');
-                
-                updateStatus('AR session active!');
-                
-                // Change button to exit
-                button.textContent = 'Exit AR';
-                button.onclick = function() {
-                    session.end();
-                };
-                
-                // Handle session end
-                session.addEventListener('end', () => {
-                    log('AR session ended');
-                    session = null;
-                    button.textContent = 'Start Basic AR';
-                    button.disabled = false;
-                    button.onclick = document.getElementById('startBasicAR').onclick;
-                    updateStatus('AR session ended');
-                });
-                
-                log('🎉 AR is working! You should now see passthrough');
-                
-            } catch (error) {
-                log(`❌ AR failed: ${error.message}`);
-                log(`Error details: ${error.stack}`);
-                updateStatus(`AR failed: ${error.message}`);
-                button.textContent = 'Start Basic AR';
-                button.disabled = false;
+            });
+        }
+
+        function onButtonClicked() {
+            if (!session) {
+                navigator.xr.requestSession('immersive-ar').then(onSessionStarted);
+            } else {
+                session.end();
             }
-        };
-        
-        // Initial setup
-        updateStatus('Ready for testing');
-        log('Page loaded - click buttons to test functionality');
-        
-        // Test if JavaScript is working
-        setTimeout(() => {
-            log('✓ JavaScript timer working');
-        }, 1000);
+        }
+
+        function onSessionStarted(xrSession) {
+            session = xrSession;
+            xrButton.innerHTML = 'Exit AR';
+            logMessage('✓ AR session started');
+
+            session.addEventListener('end', onSessionEnded);
+
+            initWebGL();
+            
+            if (!gl) {
+                session.end();
+                return;
+            }
+
+            session.updateRenderState({
+                baseLayer: new XRWebGLLayer(session, gl)
+            });
+
+            session.requestReferenceSpace('local').then((space) => {
+                refSpace = space;
+                logMessage('✓ Reference space acquired');
+                session.requestAnimationFrame(onXRFrame);
+            }).catch((err) => {
+                logMessage('❌ Reference space error: ' + err.message);
+                // Try viewer space as fallback
+                session.requestReferenceSpace('viewer').then((space) => {
+                    refSpace = space;
+                    logMessage('✓ Viewer reference space acquired');
+                    session.requestAnimationFrame(onXRFrame);
+                }).catch((err) => {
+                    logMessage('❌ All reference spaces failed: ' + err.message);
+                    session.end();
+                });
+            });
+        }
+
+        function onSessionEnded() {
+            session = null;
+            xrButton.innerHTML = 'Enter AR';
+            logMessage('AR session ended');
+            
+            if (gl && gl.canvas && gl.canvas.parentNode) {
+                gl.canvas.parentNode.removeChild(gl.canvas);
+                gl = null;
+            }
+        }
+
+        function onXRFrame(time, frame) {
+            let session = frame.session;
+            session.requestAnimationFrame(onXRFrame);
+
+            let baseLayer = session.renderState.baseLayer;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, baseLayer.framebuffer);
+            gl.viewport(0, 0, baseLayer.framebufferWidth, baseLayer.framebufferHeight);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            let pose = frame.getViewerPose(refSpace);
+            if (pose) {
+                // Successfully rendering frame - passthrough should be visible
+                if (Math.floor(time) % 1000 < 16) { // Log once per second approximately
+                    logMessage('✓ Rendering frame');
+                }
+            }
+        }
+
+        // Initialize
+        logMessage('Initializing...');
+        xrButton.addEventListener('click', onButtonClicked);
+        checkForXRSupport();
     </script>
 </body>
 </html>
