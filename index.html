@@ -245,15 +245,36 @@
                     this.updateStatus("Requesting AR session... (allow camera permissions)");
                     console.log('Requesting AR session...');
                     
-                    // Use the same minimal approach as working samples
+                    // Use minimal session requirements
                     const sessionInit = {
-                        requiredFeatures: ['local'],
-                        optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+                        optionalFeatures: ['local', 'local-floor', 'bounded-floor', 'hand-tracking']
                     };
                     
                     console.log('Session config:', sessionInit);
                     const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
                     console.log('Got session:', session);
+                    
+                    this.updateStatus("Setting up reference space...");
+                    
+                    // Try different reference space types in order of preference
+                    let referenceSpace = null;
+                    const spaceTypes = ['local-floor', 'local', 'viewer', 'bounded-floor'];
+                    
+                    for (const spaceType of spaceTypes) {
+                        try {
+                            console.log(`Trying reference space: ${spaceType}`);
+                            referenceSpace = await session.requestReferenceSpace(spaceType);
+                            console.log(`Success with reference space: ${spaceType}`);
+                            this.updateStatus(`Using ${spaceType} reference space`);
+                            break;
+                        } catch (spaceError) {
+                            console.log(`${spaceType} not supported:`, spaceError.message);
+                        }
+                    }
+                    
+                    if (!referenceSpace) {
+                        throw new Error('No supported reference space found');
+                    }
                     
                     this.updateStatus("Initializing XR renderer...");
                     
@@ -262,6 +283,7 @@
                         console.log('XR session ended');
                         this.isInXR = false;
                         document.getElementById('controls').style.display = 'block';
+                        document.getElementById('info').style.display = 'block';
                         startButton.textContent = 'Start Mixed Reality';
                         startButton.disabled = false;
                         this.updateStatus("XR session ended");
@@ -269,6 +291,9 @@
                     
                     await this.renderer.xr.setSession(session);
                     console.log('Renderer session set');
+                    
+                    // Store reference space for later use
+                    this.referenceSpace = referenceSpace;
                     
                     this.isInXR = true;
                     this.updateStatus("Mixed Reality Active! Use controllers to measure");
@@ -302,15 +327,38 @@
                     }
                     
                     this.updateStatus("Starting VR mode...");
-                    const session = await navigator.xr.requestSession('immersive-vr', {
-                        requiredFeatures: ['local'],
-                        optionalFeatures: ['hand-tracking']
-                    });
+                    const session = await navigator.xr.requestSession('immersive-vr');
+                    
+                    // Try different reference space types for VR too
+                    let referenceSpace = null;
+                    const spaceTypes = ['local-floor', 'local', 'viewer'];
+                    
+                    for (const spaceType of spaceTypes) {
+                        try {
+                            referenceSpace = await session.requestReferenceSpace(spaceType);
+                            console.log(`VR using reference space: ${spaceType}`);
+                            break;
+                        } catch (spaceError) {
+                            console.log(`VR ${spaceType} not supported:`, spaceError.message);
+                        }
+                    }
+                    
+                    if (!referenceSpace) {
+                        throw new Error('No VR reference space supported');
+                    }
                     
                     await this.renderer.xr.setSession(session);
+                    this.referenceSpace = referenceSpace;
                     this.isInXR = true;
                     this.updateStatus("VR Mode Active! Use controllers to measure");
-                    document.getElementById('controls').style.display = 'none';
+                    
+                    const startButton = document.getElementById('startXR');
+                    startButton.textContent = 'Exit VR';
+                    startButton.onclick = () => {
+                        session.end();
+                    };
+                    
+                    document.getElementById('info').style.display = 'none';
                     
                 } catch (error) {
                     this.updateStatus(`VR also failed: ${error.message} - Desktop mode only`);
