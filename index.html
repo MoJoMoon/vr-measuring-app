@@ -213,43 +213,83 @@
             }
             
             async startXR() {
+                const startButton = document.getElementById('startXR');
+                startButton.textContent = 'Starting...';
+                startButton.disabled = true;
+                
                 this.updateStatus("Checking XR support...");
+                console.log('Starting XR process...');
                 
                 // First check if XR is available
                 if (!('xr' in navigator)) {
                     this.updateStatus("WebXR not supported in this browser");
+                    startButton.textContent = 'Start Mixed Reality';
+                    startButton.disabled = false;
                     return;
                 }
                 
                 try {
                     // Check if AR is supported
+                    console.log('Checking AR support...');
                     const isSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                    console.log('AR supported:', isSupported);
+                    
                     if (!isSupported) {
                         this.updateStatus("AR not supported - trying VR mode...");
                         await this.tryVRMode();
+                        startButton.textContent = 'Start Mixed Reality';
+                        startButton.disabled = false;
                         return;
                     }
                     
-                    this.updateStatus("Requesting AR session...");
+                    this.updateStatus("Requesting AR session... (allow camera permissions)");
+                    console.log('Requesting AR session...');
                     
-                    // Try with minimal requirements first
-                    const session = await navigator.xr.requestSession('immersive-ar', {
+                    // Use the same minimal approach as working samples
+                    const sessionInit = {
                         requiredFeatures: ['local'],
-                        optionalFeatures: ['hit-test', 'dom-overlay', 'hand-tracking']
+                        optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+                    };
+                    
+                    console.log('Session config:', sessionInit);
+                    const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+                    console.log('Got session:', session);
+                    
+                    this.updateStatus("Initializing XR renderer...");
+                    
+                    // Set up the session
+                    session.addEventListener('end', () => {
+                        console.log('XR session ended');
+                        this.isInXR = false;
+                        document.getElementById('controls').style.display = 'block';
+                        startButton.textContent = 'Start Mixed Reality';
+                        startButton.disabled = false;
+                        this.updateStatus("XR session ended");
                     });
                     
-                    this.updateStatus("Setting up XR session...");
                     await this.renderer.xr.setSession(session);
+                    console.log('Renderer session set');
+                    
                     this.isInXR = true;
                     this.updateStatus("Mixed Reality Active! Use controllers to measure");
                     
-                    // Hide desktop controls in XR
-                    document.getElementById('controls').style.display = 'none';
+                    // Update button
+                    startButton.textContent = 'Exit Mixed Reality';
+                    startButton.onclick = () => {
+                        session.end();
+                    };
+                    
+                    // Hide some desktop controls in XR
+                    document.getElementById('info').style.display = 'none';
                     
                 } catch (error) {
                     console.error('XR failed:', error);
-                    this.updateStatus(`XR Error: ${error.message} - Using desktop mode`);
-                    this.isInXR = false;
+                    this.updateStatus(`XR Error: ${error.message}`);
+                    startButton.textContent = 'Start Mixed Reality';
+                    startButton.disabled = false;
+                    
+                    // Try VR as fallback
+                    setTimeout(() => this.tryVRMode(), 1000);
                 }
             }
             
@@ -438,21 +478,22 @@
             }
         }
         
-        // Check for WebXR support
+        // Initialize the app immediately
+        const app = new MRMeasuringApp();
+        
+        // Check for WebXR support and log details
         if ('xr' in navigator) {
             navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-                if (supported) {
-                    console.log('WebXR AR is supported');
-                } else {
-                    console.log('WebXR AR not supported, desktop mode available');
-                }
+                console.log('WebXR AR supported:', supported);
+                app.updateStatus(supported ? 'AR Ready - Click Start Mixed Reality' : 'AR not supported - VR mode available');
+            }).catch(err => {
+                console.log('XR check error:', err);
+                app.updateStatus('XR check failed - trying anyway');
             });
         } else {
-            console.log('WebXR not available, desktop mode only');
+            console.log('WebXR not available');
+            app.updateStatus('WebXR not available - desktop mode only');
         }
-        
-        // Initialize the app
-        const app = new MRMeasuringApp();
     </script>
 </body>
 </html>
