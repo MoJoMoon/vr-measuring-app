@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple AR Controller Test</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <title>Basic AR Debug Test</title>
     <style>
         body {
             margin: 0;
@@ -12,222 +11,166 @@
             background: #000;
             color: white;
             font-family: Arial, sans-serif;
-        }
-        
-        #ui {
-            background: rgba(0,0,0,0.8);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
+            font-size: 18px;
         }
         
         button {
             background: #4CAF50;
             color: white;
             border: none;
-            padding: 15px 25px;
-            margin: 10px 5px;
-            border-radius: 5px;
+            padding: 20px 30px;
+            margin: 15px;
+            border-radius: 10px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 20px;
+            display: block;
+            width: 300px;
         }
         
         button:hover { background: #45a049; }
-        button:disabled { background: #666; cursor: not-allowed; }
+        button:disabled { background: #666; }
+        
+        #status {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
         
         #log {
-            background: rgba(0,0,0,0.8);
+            background: rgba(255,255,255,0.05);
             padding: 15px;
-            border-radius: 5px;
-            max-height: 300px;
+            border-radius: 10px;
+            max-height: 400px;
             overflow-y: auto;
             font-family: monospace;
-            font-size: 12px;
+            font-size: 14px;
+            margin-top: 20px;
         }
     </style>
 </head>
 <body>
-    <div id="ui">
-        <h2>Simple AR Controller Test</h2>
-        <p id="status">Ready</p>
-        <button id="startAR">Start Simple AR</button>
-        <button id="addCube">Add Test Cube</button>
-        <button id="clearAll">Clear All</button>
+    <h1>Basic AR Debug Test</h1>
+    
+    <div id="status">
+        <strong>Status:</strong> <span id="statusText">Loading...</span>
     </div>
     
+    <button id="testButton">Test Button Click</button>
+    <button id="checkXR">Check WebXR Support</button>
+    <button id="startBasicAR">Start Basic AR</button>
+    
     <div id="log">
-        <div>Debug Log:</div>
+        <div><strong>Debug Log:</strong></div>
     </div>
 
     <script>
-        let scene, camera, renderer, session, referenceSpace;
-        let controllers = [];
-        let cubes = [];
         let logDiv = document.getElementById('log');
+        let statusSpan = document.getElementById('statusText');
+        let session = null;
         
         function log(message) {
+            const time = new Date().toLocaleTimeString();
             console.log(message);
-            logDiv.innerHTML += '<div>' + new Date().toLocaleTimeString() + ': ' + message + '</div>';
+            logDiv.innerHTML += `<div>${time}: ${message}</div>`;
             logDiv.scrollTop = logDiv.scrollHeight;
         }
         
         function updateStatus(message) {
-            document.getElementById('status').textContent = message;
-            log('STATUS: ' + message);
+            statusSpan.textContent = message;
+            log(`STATUS: ${message}`);
         }
         
-        function init() {
-            // Create scene
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000);
-            
-            // Create renderer
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            document.body.appendChild(renderer.domElement);
-            
-            // Add lighting
-            const light = new THREE.AmbientLight(0xffffff, 0.8);
-            scene.add(light);
-            
-            const directional = new THREE.DirectionalLight(0xffffff, 0.5);
-            directional.position.set(1, 1, 1);
-            scene.add(directional);
-            
-            log('Three.js initialized');
-        }
+        // Test basic button functionality
+        document.getElementById('testButton').onclick = function() {
+            log('✓ Button click works!');
+            updateStatus('Button click successful');
+        };
         
-        function createController(index) {
-            const controller = renderer.xr.getController(index);
+        // Check WebXR support
+        document.getElementById('checkXR').onclick = async function() {
+            log('Checking WebXR support...');
             
-            // Add select event
-            controller.addEventListener('selectstart', () => {
-                log(`Controller ${index} trigger pressed!`);
-                addCubeAtController(controller);
-            });
-            
-            // Create visual ray
-            const geometry = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(0, 0, 0),
-                new THREE.Vector3(0, 0, -2)
-            ]);
-            const material = new THREE.LineBasicMaterial({ color: 0xff0000 });
-            const line = new THREE.Line(geometry, material);
-            controller.add(line);
-            
-            scene.add(controller);
-            controllers.push(controller);
-            
-            log(`Controller ${index} created`);
-            return controller;
-        }
-        
-        function addCubeAtController(controller) {
-            // Get controller position
-            const position = new THREE.Vector3();
-            controller.getWorldPosition(position);
-            
-            // Move cube forward from controller
-            const direction = new THREE.Vector3(0, 0, -1);
-            const matrix = new THREE.Matrix4();
-            matrix.extractRotation(controller.matrixWorld);
-            direction.applyMatrix4(matrix);
-            
-            position.add(direction.multiplyScalar(0.5)); // 0.5 meters forward
-            
-            addCube(position);
-        }
-        
-        function addCube(position) {
-            const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
-            const material = new THREE.MeshPhongMaterial({ 
-                color: Math.random() * 0xffffff 
-            });
-            const cube = new THREE.Mesh(geometry, material);
-            
-            if (position) {
-                cube.position.copy(position);
-            } else {
-                cube.position.set(0, 1.5, -1); // Default position
+            if (!('xr' in navigator)) {
+                log('❌ WebXR not available in navigator');
+                updateStatus('WebXR not supported');
+                return;
             }
             
-            scene.add(cube);
-            cubes.push(cube);
-            
-            log(`Cube added at: ${cube.position.x.toFixed(2)}, ${cube.position.y.toFixed(2)}, ${cube.position.z.toFixed(2)}`);
-        }
-        
-        function clearAll() {
-            cubes.forEach(cube => {
-                scene.remove(cube);
-            });
-            cubes = [];
-            log('All cubes cleared');
-        }
-        
-        async function startAR() {
-            const button = document.getElementById('startAR');
-            button.disabled = true;
-            button.textContent = 'Starting...';
+            log('✓ WebXR available in navigator');
             
             try {
-                log('Requesting AR session...');
+                const arSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                const vrSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                
+                log(`✓ AR supported: ${arSupported}`);
+                log(`✓ VR supported: ${vrSupported}`);
+                updateStatus(`AR: ${arSupported}, VR: ${vrSupported}`);
+                
+            } catch (error) {
+                log(`❌ Error checking support: ${error.message}`);
+                updateStatus('Error checking XR support');
+            }
+        };
+        
+        // Start basic AR
+        document.getElementById('startBasicAR').onclick = async function() {
+            const button = this;
+            button.disabled = true;
+            button.textContent = 'Starting AR...';
+            
+            try {
+                log('Attempting to start AR session...');
+                
+                if (!('xr' in navigator)) {
+                    throw new Error('WebXR not available');
+                }
+                
+                // Request the most basic AR session possible
                 session = await navigator.xr.requestSession('immersive-ar');
-                log('✓ Got AR session');
+                log('✓ AR session created successfully!');
                 
-                // Get reference space
-                referenceSpace = await session.requestReferenceSpace('local');
-                log('✓ Got reference space');
+                // Test getting reference space
+                const referenceSpace = await session.requestReferenceSpace('viewer');
+                log('✓ Reference space created');
                 
-                // Set up session
-                await renderer.xr.setSession(session);
-                log('✓ Three.js XR session set');
+                updateStatus('AR session active!');
                 
-                // Create controllers
-                createController(0);
-                createController(1);
-                
-                // Start render loop
-                renderer.setAnimationLoop(render);
-                log('✓ Render loop started');
+                // Change button to exit
+                button.textContent = 'Exit AR';
+                button.onclick = function() {
+                    session.end();
+                };
                 
                 // Handle session end
                 session.addEventListener('end', () => {
                     log('AR session ended');
                     session = null;
-                    controllers = [];
-                    renderer.setAnimationLoop(null);
-                    button.textContent = 'Start Simple AR';
+                    button.textContent = 'Start Basic AR';
                     button.disabled = false;
+                    button.onclick = document.getElementById('startBasicAR').onclick;
                     updateStatus('AR session ended');
                 });
                 
-                updateStatus('AR Active! Pull controller triggers to add cubes');
-                button.textContent = 'Exit AR';
-                button.onclick = () => session.end();
+                log('🎉 AR is working! You should now see passthrough');
                 
             } catch (error) {
                 log(`❌ AR failed: ${error.message}`);
+                log(`Error details: ${error.stack}`);
                 updateStatus(`AR failed: ${error.message}`);
-                button.textContent = 'Start Simple AR';
+                button.textContent = 'Start Basic AR';
                 button.disabled = false;
             }
-        }
+        };
         
-        function render() {
-            renderer.render(scene, camera);
-        }
+        // Initial setup
+        updateStatus('Ready for testing');
+        log('Page loaded - click buttons to test functionality');
         
-        // Initialize
-        init();
-        
-        // Button events
-        document.getElementById('startAR').onclick = startAR;
-        document.getElementById('addCube').onclick = () => addCube();
-        document.getElementById('clearAll').onclick = clearAll;
-        
-        updateStatus('Ready - Click Start Simple AR');
+        // Test if JavaScript is working
+        setTimeout(() => {
+            log('✓ JavaScript timer working');
+        }, 1000);
     </script>
 </body>
 </html>
