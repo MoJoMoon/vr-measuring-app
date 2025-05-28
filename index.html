@@ -135,18 +135,34 @@
                     
                     this.updateStatus('Requesting AR session...');
                     
-                    // Request AR session with hit-test
+                    // Request AR session - try without hit-test first
                     this.session = await navigator.xr.requestSession('immersive-ar', {
-                        requiredFeatures: ['hit-test'],
-                        optionalFeatures: ['local-floor', 'local', 'viewer']
+                        optionalFeatures: ['hit-test', 'local-floor', 'local', 'viewer']
                     });
                     
-                    // Setup reference space
-                    this.referenceSpace = await this.session.requestReferenceSpace('viewer');
+                    // Setup reference space - try multiple options
+                    try {
+                        this.referenceSpace = await this.session.requestReferenceSpace('local-floor');
+                        console.log('Using local-floor reference space');
+                    } catch {
+                        try {
+                            this.referenceSpace = await this.session.requestReferenceSpace('local');
+                            console.log('Using local reference space');
+                        } catch {
+                            this.referenceSpace = await this.session.requestReferenceSpace('viewer');
+                            console.log('Using viewer reference space');
+                        }
+                    }
                     
-                    // Setup hit testing
-                    const viewerSpace = await this.session.requestReferenceSpace('viewer');
-                    this.hitTestSource = await this.session.requestHitTestSource({ space: viewerSpace });
+                    // Try to setup hit testing (optional)
+                    try {
+                        this.hitTestSource = await this.session.requestHitTestSource({ space: this.referenceSpace });
+                        console.log('Hit testing available');
+                        this.updateStatus('AR Active! Hit-test enabled - point and trigger');
+                    } catch (error) {
+                        console.log('Hit testing not available, using controller position');
+                        this.updateStatus('AR Active! Point controller and trigger to measure');
+                    }
                     
                     // Setup Three.js XR
                     await this.renderer.xr.setSession(this.session);
@@ -162,7 +178,6 @@
                         this.onSessionEnd();
                     });
                     
-                    this.updateStatus('AR Active! Point and trigger to measure');
                     button.textContent = 'Exit AR';
                     button.onclick = () => this.session.end();
                     
@@ -212,63 +227,84 @@
             }
             
             onSelect(event) {
-                // The hit testing will be done in the render loop
+                // Store which controller triggered this
+                this.lastTriggeredController = event.target;
                 this.triggerPressed = true;
+                console.log('Trigger pressed on controller');
             }
             
             render(time, frame) {
-                if (frame && this.hitTestSource) {
-                    // Perform hit test
-                    const hitTestResults = frame.getHitTestResults(this.hitTestSource);
+                if (frame && this.triggerPressed) {
+                    let hitPosition = null;
                     
-                    if (hitTestResults.length > 0 && this.triggerPressed) {
-                        const hit = hitTestResults[0];
-                        const pose = hit.getPose(this.referenceSpace);
-                        
-                        if (pose) {
-                            const position = new THREE.Vector3(
-                                pose.transform.position.x,
-                                pose.transform.position.y,
-                                pose.transform.position.z
-                            );
-                            
-                            this.addMeasurementPoint(position);
+                    // Try hit testing first if available
+                    if (this.hitTestSource) {
+                        try {
+                            const hitTestResults = frame.getHitTestResults(this.hitTestSource);
+                            if (hitTestResults.length > 0) {
+                                const hit = hitTestResults[0];
+                                const pose = hit.getPose(this.referenceSpace);
+                                if (pose) {
+                                    hitPosition = new THREE.Vector3(
+                                        pose.transform.position.x,
+                                        pose.transform.position.y,
+                                        pose.transform.position.z
+                                    );
+                                    console.log('Hit test position:', hitPosition);
+                                }
+                            }
+                        } catch (error) {
+                            console.log('Hit test failed:', error.message);
                         }
-                        
-                        this.triggerPressed = false;
                     }
+                    
+                    // Fallback: use controller position + forward direction
+                    if (!hitPosition && this.lastTriggeredController) {
+                        const controller = this.lastTriggeredController;
+                        
+                        // Get controller position
+                        const controllerPos = new THREE.Vector3();
+                        controller.getWorldPosition(controllerPos);
+                        
+                        // Get controller forward direction
+                        const controllerDir = new THREE.Vector3(0, 0, -1);
+                        const controllerMatrix = new THREE.Matrix4();
+                        controller.updateMatrixWorld();
+                        controllerMatrix.extractRotation(controller.matrixWorld);
+                        controllerDir.applyMatrix4(controllerMatrix);
+                        
+                        // Place point 1 meter in front of controller
+                        hitPosition = controllerPos.clone().add(controllerDir.multiplyScalar(1.0));
+                        console.log('Controller-based position:', hitPosition);
+                    }
+                    
+                    if (hitPosition) {
+                        this.addMeasurementPoint(hitPosition);
+                    }
+                    
+                    this.triggerPressed = false;
+                    this.lastTriggeredController = null;
                 }
                 
                 this.renderer.render(this.scene, this.camera);
             }
             
             addMeasurementPoint(position) {
-                // Create point marker
-                const pointGeometry = new THREE.SphereGeometry(0.01, 16, 16);
+                // Create point marker - smaller and more visible
+                const pointGeometry = new THREE.SphereGeometry(0.02, 16, 16);
                 const pointMaterial = new THREE.MeshPhongMaterial({ 
                     color: 0xff0000,
-                    emissive: 0x440000
+                    emissive: 0x220000
                 });
                 const pointMesh = new THREE.Mesh(pointGeometry, pointMaterial);
                 pointMesh.position.copy(position);
                 this.scene.add(pointMesh);
                 
-                // Add number label above point
                 this.pointCounter++;
-                const labelGeometry = new THREE.SphereGeometry(0.005, 8, 8);
-                const labelMaterial = new THREE.MeshPhongMaterial({ 
-                    color: 0xffff00,
-                    emissive: 0x444400
-                });
-                const label = new THREE.Mesh(labelGeometry, labelMaterial);
-                label.position.copy(position);
-                label.position.y += 0.03;
-                this.scene.add(label);
                 
                 const point = {
                     position: position.clone(),
                     mesh: pointMesh,
-                    label: label,
                     id: this.pointCounter
                 };
                 
@@ -307,19 +343,19 @@
                     `${distance.toFixed(3)} m` : 
                     `${(distance * 3.28084).toFixed(2)} ft`;
                 
-                // Create distance label at midpoint
+                // Create smaller distance label at midpoint
                 const midpoint = new THREE.Vector3()
                     .addVectors(startPoint.position, endPoint.position)
                     .multiplyScalar(0.5);
                 
-                const labelGeometry = new THREE.SphereGeometry(0.015, 16, 16);
+                const labelGeometry = new THREE.SphereGeometry(0.01, 12, 12);
                 const labelMaterial = new THREE.MeshPhongMaterial({ 
                     color: 0x00ffff,
-                    emissive: 0x004444
+                    emissive: 0x002222
                 });
                 const distanceLabel = new THREE.Mesh(labelGeometry, labelMaterial);
                 distanceLabel.position.copy(midpoint);
-                distanceLabel.position.y += 0.05;
+                distanceLabel.position.y += 0.02; // Smaller offset
                 this.scene.add(distanceLabel);
                 
                 const measurement = {
@@ -363,7 +399,6 @@
                 // Remove all points
                 this.measurementPoints.forEach(point => {
                     this.scene.remove(point.mesh);
-                    this.scene.remove(point.label);
                 });
                 this.measurementPoints = [];
                 
